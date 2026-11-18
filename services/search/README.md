@@ -161,6 +161,15 @@ Additionally, the following optional settings can be set:
 
 *   `SEARCH_EXTRACTOR_TIKA_CLEAN_STOP_WORDS=true` (default: `true`): ignore stop words like `I`, `you`, `the` during content extraction.
 
+## Content analyzer
+
+`SEARCH_CONTENT_ANALYZER` sets how extracted file contents are split into searchable words: `words` (default),
+`english` or `german`. A language analyzer also reduces words to their stem, so `content:Vertrag` finds "Verträge".
+Unlike `words`, a language analyzer does not split at a dot, so in "datei.txt" `content:Datei` finds nothing. Stop
+words such as "die" or "the" are not searchable, and wildcards are matched against the stems, so `content:*träge` no
+longer finds "Verträge". An existing index keeps its analyzer, see
+[MIGRATION.md](MIGRATION.md#changing-the-content-analyzer).
+
 ## Manually Trigger Re-Indexing a Space
 
 The service includes a command-line interface to trigger re-indexing a space:

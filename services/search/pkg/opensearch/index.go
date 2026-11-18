@@ -36,8 +36,20 @@ func VersionedIndexName(base string) string {
 
 type IndexManager string
 
+// IndexOption changes the index definition an IndexManager builds.
+type IndexOption func(*indexOptions)
+
+type indexOptions struct {
+	contentAnalyzer string
+}
+
+// WithContentAnalyzer analyzes the Content field with the named analyzer.
+func WithContentAnalyzer(name string) IndexOption {
+	return func(o *indexOptions) { o.contentAnalyzer = name }
+}
+
 // indexGenerators dispatches each IndexManager variant to its builder.
-var indexGenerators = map[IndexManager]func() ([]byte, error){
+var indexGenerators = map[IndexManager]func(indexOptions) ([]byte, error){
 	IndexManagerLatest: buildResourceMapping,
 }
 
@@ -51,22 +63,38 @@ func (m IndexManager) String() string {
 }
 
 func (m IndexManager) MarshalJSON() ([]byte, error) {
+	return m.Build()
+}
+
+// Build renders the index definition with the given options.
+func (m IndexManager) Build(opts ...IndexOption) ([]byte, error) {
 	gen, ok := indexGenerators[m]
 	if !ok {
 		return nil, fmt.Errorf("unknown index manager %q", string(m))
 	}
-	return gen()
+	var o indexOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return gen(o)
 }
 
 // buildResourceMapping renders the OpenSearch index template for a
 // search.Resource from the shared SearchFieldOverrides. OpenSearch-specific
 // tweaks (wildcard MimeType, path_hierarchy Path) are applied on top.
-func buildResourceMapping() ([]byte, error) {
+func buildResourceMapping(o indexOptions) ([]byte, error) {
 	resourceType := reflect.TypeFor[search.Resource]()
 	overrides := maps.Clone(search.Resource{}.SearchFieldOverrides())
 	mimeType := overrides["MimeType"]
 	mimeType.Type = searchmapping.TypeWildcard
 	overrides["MimeType"] = mimeType
+	_, err := searchmapping.LookupContentAnalyzer(o.contentAnalyzer)
+	if err != nil {
+		return nil, err
+	}
+	content := overrides["Content"]
+	content.Analyzer = o.contentAnalyzer
+	overrides["Content"] = content
 	if err := searchmapping.Validate(resourceType, overrides); err != nil {
 		return nil, err
 	}
@@ -116,8 +144,8 @@ func buildResourceMapping() ([]byte, error) {
 
 // Apply ensures the index exists and matches the code schema: created if
 // missing, otherwise reconciled via searchmapping.Reconcile (see osReconciler).
-func (m IndexManager) Apply(ctx context.Context, name string, client *opensearchgoAPI.Client, logger log.Logger) error {
-	localIndexB, err := m.MarshalJSON()
+func (m IndexManager) Apply(ctx context.Context, name string, client *opensearchgoAPI.Client, logger log.Logger, opts ...IndexOption) error {
+	localIndexB, err := m.Build(opts...)
 	if err != nil {
 		return fmt.Errorf("failed to marshal index %s: %w", name, err)
 	}
@@ -188,6 +216,12 @@ type osReconciler struct {
 }
 
 func (r *osReconciler) Classify() (searchmapping.Classification, error) {
+	const contentAnalyzer = "mappings.properties.Content.analyzer"
+	configured := r.local.Get(contentAnalyzer).String()
+	if indexed := r.remote.Get(contentAnalyzer); indexed.Exists() && indexed.String() != configured {
+		return searchmapping.Classification{}, searchmapping.ContentAnalyzerChangedError(r.name, indexed.String(), configured)
+	}
+
 	// Only the analysis settings affect indexing correctness; shard/replica
 	// counts and other operational knobs are the operator's to tune (and a
 	// pre-provisioned index's to own), so they are not compared.

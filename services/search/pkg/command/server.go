@@ -69,7 +69,7 @@ func Server(cfg *config.Config) *cobra.Command {
 			var eng search.Engine
 			switch cfg.Engine.Type {
 			case "bleve":
-				idx, _, err := bleve.NewIndex(cfg.Engine.Bleve.Datapath, logger)
+				idx, _, err := bleve.NewIndex(cfg.Engine.Bleve.Datapath, logger, bleve.WithContentAnalyzer(cfg.ContentAnalyzer))
 				if err != nil {
 					return err
 				}
@@ -89,7 +89,7 @@ func Server(cfg *config.Config) *cobra.Command {
 
 				// a hung cluster must fail the start, not block it forever
 				startupCtx, cancelStartup := context.WithTimeout(ctx, time.Minute)
-				openSearchBackend, err := opensearch.NewBackend(startupCtx, cfg.Engine.OpenSearch.ResourceIndex.Name, client, logger)
+				openSearchBackend, err := opensearch.NewBackend(startupCtx, cfg.Engine.OpenSearch.ResourceIndex.Name, client, logger, opensearch.WithContentAnalyzer(cfg.ContentAnalyzer))
 				cancelStartup()
 				if err != nil {
 					return fmt.Errorf("failed to create OpenSearch backend: %w", err)

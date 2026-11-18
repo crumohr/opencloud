@@ -24,6 +24,22 @@ func ManualActionRequiredError(index string, reasons []string) error {
 	)
 }
 
+// ContentAnalyzerChangedError reports an index created with another content
+// analyzer than the configured one; only a new index can change it. Both are
+// shown as configured, bleve's own names mapped back.
+func ContentAnalyzerChangedError(index, indexed, configured string) error {
+	for name, bleveName := range contentAnalyzers {
+		if bleveName == indexed {
+			indexed = name
+		}
+	}
+	if configured == "" {
+		configured = WordsAnalyzer
+	}
+	return fmt.Errorf("%w: index %s was created with the content analyzer %q, not the configured %q: configure %q again or move to a new index, see the search service's MIGRATION.md",
+		ErrManualActionRequired, index, indexed, configured, indexed)
+}
+
 type Verdict string
 
 const (

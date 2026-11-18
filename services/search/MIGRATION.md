@@ -45,3 +45,12 @@ Once the new index is filled, every directory but the one with the highest
 ```shell
 rm -r "$OC_BASE_DATA_PATH/search/bleve"
 ```
+
+## Changing the content analyzer
+
+An index keeps the content analyzer it was created with, and the service does
+not start if `SEARCH_CONTENT_ANALYZER` differs. Point the service at a new
+index (`SEARCH_ENGINE_OPEN_SEARCH_RESOURCE_INDEX_NAME` or
+`SEARCH_ENGINE_BLEVE_DATA_PATH`), restart it, run
+`opencloud search index --all-spaces --force-rescan`, then remove the old index
+with the commands above, using its old name or path.

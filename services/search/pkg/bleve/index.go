@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,10 +13,13 @@ import (
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/keyword"
 	"github.com/blevesearch/bleve/v2/analysis/char/regexp"
+	_ "github.com/blevesearch/bleve/v2/analysis/lang/de" // registers de
+	_ "github.com/blevesearch/bleve/v2/analysis/lang/en" // registers en
 	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
 	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/mapping"
 	"github.com/blevesearch/bleve/v2/search/query"
+	"github.com/tidwall/gjson"
 
 	"github.com/opencloud-eu/opencloud/pkg/log"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/bleve/hierarchy"
@@ -27,13 +31,26 @@ import (
 // instead of blocking forever on the file lock.
 var openRuntimeConfig = map[string]any{"bolt_timeout": "5s"}
 
+// MappingOption changes the index mapping NewMapping builds.
+type MappingOption func(*mappingOptions)
+
+type mappingOptions struct {
+	contentAnalyzer string
+}
+
+// WithContentAnalyzer analyzes the Content field with the named analyzer, see
+// searchmapping.LookupContentAnalyzer.
+func WithContentAnalyzer(name string) MappingOption {
+	return func(o *mappingOptions) { o.contentAnalyzer = name }
+}
+
 // NewIndex opens (or creates) the bleve index at root and reconciles its schema
-// against NewMapping() via searchmapping.Reconcile.
-func NewIndex(root string, logger log.Logger) (bleve.Index, searchmapping.Classification, error) {
+// against NewMapping(opts...) via searchmapping.Reconcile.
+func NewIndex(root string, logger log.Logger, opts ...MappingOption) (bleve.Index, searchmapping.Classification, error) {
 	destination := filepath.Join(root, fmt.Sprintf("bleve-v%d", search.SchemaVersion))
 	index, err := bleve.OpenUsing(destination, openRuntimeConfig)
 	if errors.Is(err, bleve.ErrorIndexPathDoesNotExist) {
-		indexMapping, err := NewMapping()
+		indexMapping, err := NewMapping(opts...)
 		if err != nil {
 			return nil, searchmapping.Classification{}, err
 		}
@@ -49,7 +66,7 @@ func NewIndex(root string, logger log.Logger) (bleve.Index, searchmapping.Classi
 		return nil, searchmapping.Classification{}, err
 	}
 
-	r := &bleveReconciler{index: index, destination: destination}
+	r := &bleveReconciler{index: index, destination: destination, opts: opts}
 	classification, err := searchmapping.Reconcile(destination, r, logger)
 	if err != nil {
 		if r.index != nil {
@@ -65,11 +82,12 @@ func NewIndex(root string, logger log.Logger) (bleve.Index, searchmapping.Classi
 type bleveReconciler struct {
 	index       bleve.Index
 	destination string
+	opts        []MappingOption
 	codeB       []byte // marshaled code mapping, produced by Classify, used by ApplyAdditive
 }
 
 func (r *bleveReconciler) Classify() (searchmapping.Classification, error) {
-	classification, codeB, err := classifyStoredMapping(r.index)
+	classification, codeB, err := classifyStoredMapping(r.index, r.opts)
 	r.codeB = codeB
 	return classification, err
 }
@@ -100,18 +118,27 @@ func (r *bleveReconciler) ApplyAdditive() (bool, error) {
 // returns the marshaled code mapping. New-in-code fields that already hold data
 // (previously indexed dynamically) are breaking. The compare assumes stable
 // bleve marshaling; the golden test guards against a marshaling-default drift.
-func classifyStoredMapping(index bleve.Index) (searchmapping.Classification, []byte, error) {
+func classifyStoredMapping(index bleve.Index, opts []MappingOption) (searchmapping.Classification, []byte, error) {
 	storedB, err := index.GetInternal([]byte("_mapping"))
 	if err != nil {
 		return searchmapping.Classification{}, nil, fmt.Errorf("failed to read the stored index mapping: %w", err)
 	}
-	codeMapping, err := NewMapping()
+	codeMapping, err := NewMapping(opts...)
 	if err != nil {
 		return searchmapping.Classification{}, nil, err
 	}
 	codeB, err := json.Marshal(codeMapping)
 	if err != nil {
 		return searchmapping.Classification{}, nil, err
+	}
+
+	const contentAnalyzer = "default_mapping.properties.Content.fields.0.analyzer"
+	if indexed := gjson.GetBytes(storedB, contentAnalyzer); indexed.Exists() && indexed.String() != gjson.GetBytes(codeB, contentAnalyzer).String() {
+		var o mappingOptions
+		for _, opt := range opts {
+			opt(&o)
+		}
+		return searchmapping.Classification{}, nil, searchmapping.ContentAnalyzerChangedError(index.Name(), indexed.String(), o.contentAnalyzer)
 	}
 
 	var stored, code map[string]any
@@ -173,9 +200,21 @@ func compareKeysExcept(stored, code map[string]any, skip, prefix string, reasons
 	}
 }
 
-func NewMapping() (mapping.IndexMapping, error) {
+// NewMapping builds the index mapping for a search.Resource.
+func NewMapping(opts ...MappingOption) (mapping.IndexMapping, error) {
+	var o mappingOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	resourceType := reflect.TypeFor[search.Resource]()
-	overrides := search.Resource{}.SearchFieldOverrides()
+	overrides := maps.Clone(search.Resource{}.SearchFieldOverrides())
+	analyzer, err := searchmapping.LookupContentAnalyzer(o.contentAnalyzer)
+	if err != nil {
+		return nil, err
+	}
+	content := overrides["Content"]
+	content.Analyzer = analyzer
+	overrides["Content"] = content
 	if err := searchmapping.Validate(resourceType, overrides); err != nil {
 		return nil, err
 	}

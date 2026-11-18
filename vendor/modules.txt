@@ -135,6 +135,7 @@ github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/microseconds
 github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/milliseconds
 github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/nanoseconds
 github.com/blevesearch/bleve/v2/analysis/datetime/timestamp/seconds
+github.com/blevesearch/bleve/v2/analysis/lang/de
 github.com/blevesearch/bleve/v2/analysis/lang/en
 github.com/blevesearch/bleve/v2/analysis/token/lowercase
 github.com/blevesearch/bleve/v2/analysis/token/porter
@@ -199,6 +200,7 @@ github.com/blevesearch/segment
 ## explicit; go 1.13
 github.com/blevesearch/snowballstem
 github.com/blevesearch/snowballstem/english
+github.com/blevesearch/snowballstem/german
 # github.com/blevesearch/upsidedown_store_api v1.0.2
 ## explicit; go 1.18
 github.com/blevesearch/upsidedown_store_api

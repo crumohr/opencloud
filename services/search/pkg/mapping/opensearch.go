@@ -83,6 +83,9 @@ func buildOpenSearchProperties(t reflect.Type, overrides map[string]FieldOpts, p
 		if err != nil {
 			return fmt.Errorf("mapping: field %q: %w", key, err)
 		}
+		if opts.Analyzer != "" {
+			fm["analyzer"] = opts.Analyzer
+		}
 		props[fi.Name] = fm
 		return nil
 	})

@@ -34,7 +34,7 @@ type Backend struct {
 }
 
 // NewBackend creates a backend on the versioned generation of the named index.
-func NewBackend(ctx context.Context, name string, client *opensearchgoAPI.Client, logger log.Logger) (*Backend, error) {
+func NewBackend(ctx context.Context, name string, client *opensearchgoAPI.Client, logger log.Logger, opts ...IndexOption) (*Backend, error) {
 	index := VersionedIndexName(name)
 
 	pingResp, err := client.Ping(ctx, &opensearchgoAPI.PingReq{})
@@ -46,7 +46,8 @@ func NewBackend(ctx context.Context, name string, client *opensearchgoAPI.Client
 	}
 
 	// apply the index template
-	if err := IndexManagerLatest.Apply(ctx, index, client, logger); err != nil {
+	err = IndexManagerLatest.Apply(ctx, index, client, logger, opts...)
+	if err != nil {
 		return nil, fmt.Errorf("failed to apply index template: %w", err)
 	}
 

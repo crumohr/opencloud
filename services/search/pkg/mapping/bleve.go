@@ -122,6 +122,9 @@ func bleveFieldMapping(fieldType string, opts FieldOpts) (*bleveMapping.FieldMap
 		fm := bleve.NewTextFieldMapping()
 		if fieldType == TypeFulltext {
 			fm.Analyzer = WordsAnalyzer
+			if opts.Analyzer != "" {
+				fm.Analyzer = opts.Analyzer
+			}
 		}
 		switch {
 		case opts.IncludeInAll != nil:

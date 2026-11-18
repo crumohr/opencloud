@@ -1,6 +1,7 @@
 package bleve_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,8 +17,11 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/opencloud-eu/opencloud/pkg/log"
+	searchService "github.com/opencloud-eu/opencloud/protogen/gen/opencloud/services/search/v0"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/bleve"
+	"github.com/opencloud-eu/opencloud/services/search/pkg/content"
 	searchmapping "github.com/opencloud-eu/opencloud/services/search/pkg/mapping"
+	bleveQuery "github.com/opencloud-eu/opencloud/services/search/pkg/query/bleve"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/search"
 )
 
@@ -189,6 +193,13 @@ var _ = Describe("NewIndex", func() {
 		Expect(err).To(MatchError(searchmapping.ErrManualActionRequired))
 	})
 
+	It("refuses another content analyzer", func() {
+		buildIndex(codeMapping(), nil)
+
+		_, _, err := bleve.NewIndex(root, log.NopLogger(), bleve.WithContentAnalyzer("german"))
+		Expect(err).To(MatchError(searchmapping.ErrManualActionRequired))
+	})
+
 	It("refuses on a changed analyzer definition", func() {
 		old := codeMapping()
 		Expect(old.CustomAnalysis.Analyzers).To(HaveKey(searchmapping.WordsAnalyzer))
@@ -211,6 +222,32 @@ var _ = Describe("NewMapping", func() {
 		impl, ok := m.(*bleveMapping.IndexMappingImpl)
 		Expect(ok).To(BeTrue())
 		Expect(impl.Validate()).To(Succeed())
+	})
+
+	It("keeps the default mapping with the words content analyzer", func() {
+		defaultMapping, err := bleve.NewMapping()
+		Expect(err).ToNot(HaveOccurred())
+		m, err := bleve.NewMapping(bleve.WithContentAnalyzer("words"))
+		Expect(err).ToNot(HaveOccurred())
+		defaultB, err := json.Marshal(defaultMapping)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(json.Marshal(m)).To(MatchJSON(defaultB))
+	})
+
+	It("finds another form of a word in the contents with german only", func() {
+		for analyzer, matches := range map[string]int{"words": 0, "german": 1} {
+			m, err := bleve.NewMapping(bleve.WithContentAnalyzer(analyzer))
+			Expect(err).ToNot(HaveOccurred())
+			idx, err := bleveSearch.NewMemOnly(m)
+			Expect(err).ToNot(HaveOccurred())
+			backend := bleve.NewBackend(idx, bleveQuery.DefaultCreator, log.NopLogger())
+			doc := search.Resource{ID: "1$2!3", RootID: "1$2!2", Path: "./a.txt", Document: content.Document{Name: "a.txt", Content: "Die Verträge"}}
+			Expect(backend.Upsert(doc.ID, doc)).To(Succeed())
+
+			resp, err := backend.Search(context.Background(), &searchService.SearchIndexRequest{Query: "content:Vertrag"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp.Matches).To(HaveLen(matches), analyzer)
+		}
 	})
 
 	// A diff here means existing indexes will classify as breaking (schema or

@@ -12,6 +12,7 @@ import (
 	"github.com/opencloud-eu/opencloud/pkg/shared"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/config"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/config/defaults"
+	"github.com/opencloud-eu/opencloud/services/search/pkg/mapping"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/search"
 
 	"github.com/opencloud-eu/opencloud/pkg/config/envdecode"
@@ -53,6 +54,11 @@ func Validate(cfg *config.Config) error {
 	}
 	if cfg.ServiceAccount.ServiceAccountSecret == "" {
 		return shared.MissingServiceAccountSecret(cfg.Service.Name)
+	}
+
+	_, err := mapping.LookupContentAnalyzer(cfg.ContentAnalyzer)
+	if err != nil {
+		return fmt.Errorf("search content analyzer: %w", err)
 	}
 
 	return validateQueryTemplate(cfg.QueryTemplate)

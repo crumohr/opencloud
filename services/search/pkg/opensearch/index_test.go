@@ -16,6 +16,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/opencloud-eu/opencloud/pkg/log"
+	searchService "github.com/opencloud-eu/opencloud/protogen/gen/opencloud/services/search/v0"
 	"github.com/opencloud-eu/opencloud/services/search/internal/opensearchtest"
 	searchmapping "github.com/opencloud-eu/opencloud/services/search/pkg/mapping"
 	"github.com/opencloud-eu/opencloud/services/search/pkg/opensearch"
@@ -78,6 +79,42 @@ func goldenAdvice(golden, got map[string]any, propsPath, analysisPath string) st
 		return fmt.Sprintf("breaking schema change (%v): regenerate the golden with UPDATE_GOLDEN=1 and bump search.SchemaVersion", c.Reasons)
 	}
 	return "the schema changed outside the classified tree: regenerate the golden with UPDATE_GOLDEN=1"
+}
+
+func TestContentAnalyzer(t *testing.T) {
+	t.Run("words keeps the default index definition", func(t *testing.T) {
+		b, err := opensearch.IndexManagerLatest.Build(opensearch.WithContentAnalyzer("words"))
+		require.NoError(t, err)
+		require.Equal(t, opensearch.IndexManagerLatest.String(), string(b))
+	})
+
+	t.Run("finds another form of a word in the contents with german only", func(t *testing.T) {
+		tc := opensearchtest.NewDefaultTestClient(t, defaultConfig.Engine.OpenSearch.Client)
+		for analyzer, matches := range map[string]int{"words": 0, "german": 1} {
+			name := "opencloud-test-content-" + analyzer
+			tc.Require.IndicesReset([]string{opensearch.VersionedIndexName(name)})
+			backend, err := opensearch.NewBackend(t.Context(), name, tc.Client(), log.NopLogger(), opensearch.WithContentAnalyzer(analyzer))
+			require.NoError(t, err)
+			doc := opensearchtest.Testdata.Resources.File
+			doc.Content = "Die Verträge"
+			require.NoError(t, backend.Upsert(doc.ID, doc))
+			tc.Require.IndicesRefresh([]string{opensearch.VersionedIndexName(name)}, nil)
+
+			resp, err := backend.Search(t.Context(), &searchService.SearchIndexRequest{Query: "content:Vertrag"})
+			require.NoError(t, err)
+			require.Len(t, resp.Matches, matches, analyzer)
+		}
+	})
+
+	t.Run("refuses another analyzer on an existing index", func(t *testing.T) {
+		indexName := "opencloud-test-resource"
+		tc := opensearchtest.NewDefaultTestClient(t, defaultConfig.Engine.OpenSearch.Client)
+		tc.Require.IndicesReset([]string{indexName})
+		tc.Require.IndicesCreate(indexName, strings.NewReader(opensearch.IndexManagerLatest.String()))
+
+		err := opensearch.IndexManagerLatest.Apply(t.Context(), indexName, tc.Client(), log.NopLogger(), opensearch.WithContentAnalyzer("german"))
+		require.ErrorIs(t, err, opensearch.ErrManualActionRequired)
+	})
 }
 
 func TestIndexManager(t *testing.T) {

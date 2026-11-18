@@ -64,6 +64,7 @@ func DefaultConfig() *config.Config {
 			AckWait:          1 * time.Minute,
 		},
 		ContentExtractionSizeLimit: 20 * 1024 * 1024, // Limit content extraction to <20MB files by default
+		ContentAnalyzer:            "words",
 		BatchSize:                  50,
 		ReindexMaxConcurrency:      3,
 		QueryTemplate:              "(" + config.QueryPlaceholder + `) AND (NOT path:"./.space" AND NOT id:` + config.PersonalSpaceRootPlaceholder + `)`,
