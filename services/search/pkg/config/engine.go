@@ -19,8 +19,9 @@ type EngineBleve struct {
 
 // EngineOpenSearch configures the OpenSearch engine
 type EngineOpenSearch struct {
-	Client        EngineOpenSearchClient        `yaml:"client"`
-	ResourceIndex EngineOpenSearchResourceIndex `yaml:"resource_index"`
+	Client              EngineOpenSearchClient        `yaml:"client"`
+	ResourceIndex       EngineOpenSearchResourceIndex `yaml:"resource_index"`
+	ContentAnalysisFile string                        `yaml:"content_analysis_file" env:"SEARCH_ENGINE_OPEN_SEARCH_CONTENT_ANALYSIS_FILE" desc:"OpenSearch engine only: path to a JSON file with custom analysis definitions, shaped like the analysis settings of an index, whose names all start with 'content_'. It is read and validated on every start, but only added to the index when the index is created; a changed file is not detected and needs a new index. SEARCH_CONTENT_ANALYZER can then name an analyzer from it." introductionVersion:"%%NEXT%%"`
 }
 
 // EngineOpenSearchResourceIndex defines the OpenSearch index for resources

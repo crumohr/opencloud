@@ -53,4 +53,7 @@ not start if `SEARCH_CONTENT_ANALYZER` differs. Point the service at a new
 index (`SEARCH_ENGINE_OPEN_SEARCH_RESOURCE_INDEX_NAME` or
 `SEARCH_ENGINE_BLEVE_DATA_PATH`), restart it, run
 `opencloud search index --all-spaces --force-rescan`, then remove the old index
-with the commands above, using its old name or path.
+with the commands above, using its old name or path. The same applies after
+changing the file in `SEARCH_ENGINE_OPEN_SEARCH_CONTENT_ANALYSIS_FILE`: it is
+read and validated on every start, but only applied when the index is created,
+and a change is not detected.

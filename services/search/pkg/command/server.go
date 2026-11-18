@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/signal"
 	"time"
 
@@ -87,9 +88,18 @@ func Server(cfg *config.Config) *cobra.Command {
 					return err
 				}
 
+				indexOptions := []opensearch.IndexOption{opensearch.WithContentAnalyzer(cfg.ContentAnalyzer)}
+				if path := cfg.Engine.OpenSearch.ContentAnalysisFile; path != "" {
+					definitions, err := os.ReadFile(path)
+					if err != nil {
+						return fmt.Errorf("SEARCH_ENGINE_OPEN_SEARCH_CONTENT_ANALYSIS_FILE: %w", err)
+					}
+					indexOptions = append(indexOptions, opensearch.WithContentAnalysis(definitions))
+				}
+
 				// a hung cluster must fail the start, not block it forever
 				startupCtx, cancelStartup := context.WithTimeout(ctx, time.Minute)
-				openSearchBackend, err := opensearch.NewBackend(startupCtx, cfg.Engine.OpenSearch.ResourceIndex.Name, client, logger, opensearch.WithContentAnalyzer(cfg.ContentAnalyzer))
+				openSearchBackend, err := opensearch.NewBackend(startupCtx, cfg.Engine.OpenSearch.ResourceIndex.Name, client, logger, indexOptions...)
 				cancelStartup()
 				if err != nil {
 					return fmt.Errorf("failed to create OpenSearch backend: %w", err)

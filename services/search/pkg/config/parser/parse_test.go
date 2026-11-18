@@ -44,3 +44,20 @@ func TestValidateContentAnalyzer(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateContentAnalysisFile(t *testing.T) {
+	for engine, valid := range map[string]bool{"open-search": true, "bleve": false} {
+		cfg := defaults.DefaultConfig()
+		defaults.EnsureDefaults(cfg)
+		cfg.TokenManager.JWTSecret = "any-jwt"
+		cfg.ServiceAccount.ServiceAccountID = "any-service-account-id"
+		cfg.ServiceAccount.ServiceAccountSecret = "any-service-account-secret"
+		cfg.Engine.Type = engine
+		cfg.Engine.OpenSearch.ContentAnalysisFile = "/etc/opencloud/content-analysis.json"
+		cfg.ContentAnalyzer = "content_german"
+
+		if err := Validate(cfg); (err == nil) != valid {
+			t.Errorf("Validate with the content analysis file on %s = %v, want valid %v", engine, err, valid)
+		}
+	}
+}

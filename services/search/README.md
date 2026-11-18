@@ -170,6 +170,38 @@ words such as "die" or "the" are not searchable, and wildcards are matched again
 longer finds "Verträge". An existing index keeps its analyzer, see
 [MIGRATION.md](MIGRATION.md#changing-the-content-analyzer).
 
+With OpenSearch, `SEARCH_ENGINE_OPEN_SEARCH_CONTENT_ANALYSIS_FILE` can name a JSON file with custom analysis
+definitions, shaped like the [analysis settings](https://docs.opensearch.org/latest/analyzers/) of an index. Every name
+defined in it must start with `content_`; built-in components may be used freely. `SEARCH_CONTENT_ANALYZER` then names
+an analyzer from that file. With this file and `SEARCH_CONTENT_ANALYZER=content_german`, `content:Reise` finds
+"Reisekosten":
+
+```json
+{
+  "filter": {
+    "content_compounds": {
+      "type": "dictionary_decompounder",
+      "word_list": ["reise", "kosten"],
+      "min_subword_size": 4,
+      "only_longest_match": false
+    }
+  },
+  "analyzer": {
+    "content_german": {
+      "type": "custom",
+      "tokenizer": "standard",
+      "filter": ["lowercase", "content_compounds", "german_normalization", "german_stem"]
+    }
+  }
+}
+```
+
+The parts of a compound share its position, so `content:Reisekosten` also finds documents that contain only "Reise"
+or only "Kosten". The file is read and validated on every start but only applied when the index is created, and a
+changed file is not detected: changing it, or a word list or other file it refers to, needs a new index and
+`opencloud search index --all-spaces --force-rescan`. Paths such as `word_list_path` refer to files on the OpenSearch
+nodes, not on the search service.
+
 ## Manually Trigger Re-Indexing a Space
 
 The service includes a command-line interface to trigger re-indexing a space:

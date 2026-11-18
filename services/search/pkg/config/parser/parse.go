@@ -56,9 +56,15 @@ func Validate(cfg *config.Config) error {
 		return shared.MissingServiceAccountSecret(cfg.Service.Name)
 	}
 
-	_, err := mapping.LookupContentAnalyzer(cfg.ContentAnalyzer)
-	if err != nil {
-		return fmt.Errorf("search content analyzer: %w", err)
+	if cfg.Engine.OpenSearch.ContentAnalysisFile != "" && cfg.Engine.Type != "open-search" {
+		return errors.New("SEARCH_ENGINE_OPEN_SEARCH_CONTENT_ANALYSIS_FILE needs the open-search engine")
+	}
+	// with a file, the OpenSearch engine checks the name against it
+	if cfg.Engine.OpenSearch.ContentAnalysisFile == "" {
+		_, err := mapping.LookupContentAnalyzer(cfg.ContentAnalyzer)
+		if err != nil {
+			return fmt.Errorf("search content analyzer: %w", err)
+		}
 	}
 
 	return validateQueryTemplate(cfg.QueryTemplate)

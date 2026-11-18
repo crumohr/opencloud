@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	opensearchgo "github.com/opensearch-project/opensearch-go/v4"
@@ -41,11 +43,26 @@ type IndexOption func(*indexOptions)
 
 type indexOptions struct {
 	contentAnalyzer string
+	contentAnalysis []byte
 }
 
 // WithContentAnalyzer analyzes the Content field with the named analyzer.
 func WithContentAnalyzer(name string) IndexOption {
 	return func(o *indexOptions) { o.contentAnalyzer = name }
+}
+
+// contentAnalysisPrefix starts every name in the operator's analysis
+// definitions, so they cannot replace or shadow any other definition.
+const contentAnalysisPrefix = "content_"
+
+// contentAnalysisSections are the sections of settings.analysis the
+// operator's definitions may add to.
+var contentAnalysisSections = strings.Fields("analyzer char_filter filter normalizer tokenizer")
+
+// WithContentAnalysis adds analysis definitions, a JSON object shaped like
+// settings.analysis, to the index settings.
+func WithContentAnalysis(definitions []byte) IndexOption {
+	return func(o *indexOptions) { o.contentAnalysis = definitions }
 }
 
 // indexGenerators dispatches each IndexManager variant to its builder.
@@ -88,9 +105,40 @@ func buildResourceMapping(o indexOptions) ([]byte, error) {
 	mimeType := overrides["MimeType"]
 	mimeType.Type = searchmapping.TypeWildcard
 	overrides["MimeType"] = mimeType
-	_, err := searchmapping.LookupContentAnalyzer(o.contentAnalyzer)
-	if err != nil {
-		return nil, err
+	var definitions map[string]map[string]any
+	if o.contentAnalysis != nil {
+		decoder := json.NewDecoder(bytes.NewReader(o.contentAnalysis))
+		decoder.UseNumber() // keep large numbers exact
+		err := decoder.Decode(&definitions)
+		_, next := decoder.Token()
+		if err == nil && next != io.EOF {
+			err = errors.New("trailing content after the JSON object")
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil, errors.New("content analysis: the file is empty")
+		case err != nil:
+			return nil, fmt.Errorf("content analysis: %w", err)
+		case definitions == nil:
+			return nil, errors.New("content analysis: not a JSON object")
+		}
+		for section, named := range definitions {
+			if named == nil || !slices.Contains(contentAnalysisSections, section) {
+				return nil, fmt.Errorf("content analysis: cannot define section %q", section)
+			}
+			for name, definition := range named {
+				// a dotted name would be read as a path into another setting
+				if _, object := definition.(map[string]any); !object || !strings.HasPrefix(name, contentAnalysisPrefix) || strings.Contains(name, ".") {
+					return nil, fmt.Errorf("content analysis: cannot define %s %q, names start with %q and contain no dot, definitions are objects", section, name, contentAnalysisPrefix)
+				}
+			}
+		}
+	}
+	if _, defined := definitions["analyzer"][o.contentAnalyzer].(map[string]any); !defined {
+		_, err := searchmapping.LookupContentAnalyzer(o.contentAnalyzer)
+		if err != nil {
+			return nil, err
+		}
 	}
 	content := overrides["Content"]
 	content.Analyzer = o.contentAnalyzer
@@ -138,6 +186,15 @@ func buildResourceMapping(o indexOptions) ([]byte, error) {
 		"mappings": map[string]any{
 			"properties": props,
 		},
+	}
+	analysis, _ := index["settings"].(map[string]any)["analysis"].(map[string]any)
+	for section, named := range definitions {
+		merged, _ := analysis[section].(map[string]any)
+		if merged == nil {
+			merged = map[string]any{}
+			analysis[section] = merged
+		}
+		maps.Copy(merged, named)
 	}
 	return json.Marshal(index)
 }
@@ -195,12 +252,19 @@ func (m IndexManager) Apply(ctx context.Context, name string, client *opensearch
 		return fmt.Errorf("failed to marshal index %s: %w", name, err)
 	}
 
+	var o indexOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	r := &osReconciler{
 		ctx:    ctx,
 		name:   name,
 		client: client,
 		local:  gjson.ParseBytes(localIndexB),
 		remote: gjson.ParseBytes(remoteIndexB),
+	}
+	if o.contentAnalysis != nil {
+		logger.Info().Str("index", name).Msg("the content analysis file is only applied when an index is created, this index keeps the definitions it was created with")
 	}
 	_, err = searchmapping.Reconcile(name, r, logger)
 	return err
@@ -226,8 +290,9 @@ func (r *osReconciler) Classify() (searchmapping.Classification, error) {
 	// counts and other operational knobs are the operator's to tune (and a
 	// pre-provisioned index's to own), so they are not compared.
 	var reasons []string
-	lv := r.local.Get("settings.analysis").Raw
-	rv := r.remote.Get("settings.index.analysis").Raw
+	// the operator's definitions only apply when the index is created
+	lv := withoutContentAnalysis(r.local.Get("settings.analysis").Raw)
+	rv := withoutContentAnalysis(r.remote.Get("settings.index.analysis").Raw)
 	if !jsonEqual(lv, rv) {
 		reasons = append(reasons, fmt.Sprintf("settings.analysis changed: index %s, code %s", rawOrUnset(rv), rawOrUnset(lv)))
 	}
@@ -260,6 +325,31 @@ func (r *osReconciler) ApplyAdditive() (bool, error) {
 		return false, fmt.Errorf("failed to update mapping of index %s: not acknowledged", r.name)
 	}
 	return true, nil
+}
+
+// withoutContentAnalysis drops the operator's prefixed definitions, and the
+// sections left empty, from a raw settings.analysis.
+func withoutContentAnalysis(raw string) string {
+	var analysis map[string]map[string]any
+	err := json.Unmarshal([]byte(raw), &analysis)
+	if err != nil {
+		return raw
+	}
+	for _, section := range contentAnalysisSections {
+		for name := range analysis[section] {
+			if strings.HasPrefix(name, contentAnalysisPrefix) {
+				delete(analysis[section], name)
+			}
+		}
+		if len(analysis[section]) == 0 {
+			delete(analysis, section)
+		}
+	}
+	b, err := json.Marshal(analysis)
+	if err != nil {
+		return raw
+	}
+	return string(b)
 }
 
 // jsonEqual reports whether two raw JSON values are deeply equal. A missing

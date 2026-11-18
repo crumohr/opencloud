@@ -117,6 +117,87 @@ func TestContentAnalyzer(t *testing.T) {
 	})
 }
 
+func TestContentAnalysis(t *testing.T) {
+	const definitions = `{
+		"filter": {"content_compounds": {"type": "dictionary_decompounder", "word_list": ["reise", "kosten"], "min_subword_size": 4, "only_longest_match": false}},
+		"analyzer": {"content_german": {"type": "custom", "tokenizer": "standard", "filter": ["lowercase", "content_compounds", "german_normalization", "german_stem"]}}
+	}`
+	withDefinitions := func(definitions string) []opensearch.IndexOption {
+		return []opensearch.IndexOption{opensearch.WithContentAnalyzer("content_german"), opensearch.WithContentAnalysis([]byte(definitions))}
+	}
+
+	t.Run("refuses definitions it cannot add", func(t *testing.T) {
+		for definitions, wantErr := range map[string]string{
+			`null`:               "not a JSON object",
+			`{} {}`:              "trailing content",
+			`{"similarity": {}}`: `cannot define section "similarity"`,
+			`{"tokenizer": {"standard": {"type": "keyword"}}}`:       `cannot define tokenizer "standard"`,
+			`{"tokenizer": {"content_t.type": {"type": "keyword"}}}`: `cannot define tokenizer "content_t.type"`,
+			`{"filter": {"content_f": 1}}`:                           `cannot define filter "content_f"`,
+			`{"analyzer": {"content_other": {"type": "german"}}}`:    `unknown content analyzer "content_german"`,
+		} {
+			_, err := opensearch.IndexManagerLatest.Build(withDefinitions(definitions)...)
+			require.ErrorContains(t, err, wantErr, definitions)
+		}
+	})
+
+	t.Run("finds a part of a compound word", func(t *testing.T) {
+		tc := opensearchtest.NewDefaultTestClient(t, defaultConfig.Engine.OpenSearch.Client)
+		name := "opencloud-test-content-analysis"
+		tc.Require.IndicesReset([]string{opensearch.VersionedIndexName(name)})
+		backend, err := opensearch.NewBackend(t.Context(), name, tc.Client(), log.NopLogger(), withDefinitions(definitions)...)
+		require.NoError(t, err)
+		doc := opensearchtest.Testdata.Resources.File
+		doc.Content = "Reisekosten"
+		require.NoError(t, backend.Upsert(doc.ID, doc))
+		tc.Require.IndicesRefresh([]string{opensearch.VersionedIndexName(name)}, nil)
+
+		resp, err := backend.Search(t.Context(), &searchService.SearchIndexRequest{Query: "content:Reise"})
+		require.NoError(t, err)
+		require.Len(t, resp.Matches, 1)
+
+		// the definitions only apply when the index is created
+		changed := strings.Replace(definitions, `"kosten"`, `"kosten", "dienst"`, 1)
+		require.NoError(t, opensearch.IndexManagerLatest.Apply(t.Context(), opensearch.VersionedIndexName(name), tc.Client(), log.NopLogger(), withDefinitions(definitions)...))
+		require.NoError(t, opensearch.IndexManagerLatest.Apply(t.Context(), opensearch.VersionedIndexName(name), tc.Client(), log.NopLogger(), withDefinitions(changed)...))
+
+		// and an index created with a file opens without one if its analyzer is built in
+		tc.Require.IndicesReset([]string{"opencloud-test-resource"})
+		require.NoError(t, opensearch.IndexManagerLatest.Apply(t.Context(), "opencloud-test-resource", tc.Client(), log.NopLogger(), opensearch.WithContentAnalyzer("german"), opensearch.WithContentAnalysis([]byte(definitions))))
+		require.NoError(t, opensearch.IndexManagerLatest.Apply(t.Context(), "opencloud-test-resource", tc.Client(), log.NopLogger(), opensearch.WithContentAnalyzer("german")))
+	})
+
+	t.Run("still refuses a changed built-in definition", func(t *testing.T) {
+		tc := opensearchtest.NewDefaultTestClient(t, defaultConfig.Engine.OpenSearch.Client)
+		indexName := "opencloud-test-resource"
+		tc.Require.IndicesReset([]string{indexName})
+		b, err := opensearch.IndexManagerLatest.Build(withDefinitions(definitions)...)
+		require.NoError(t, err)
+		drifted, err := sjson.SetBytes(b, "settings.analysis.analyzer.words.filter", []string{"lowercase", "asciifolding"})
+		require.NoError(t, err)
+		tc.Require.IndicesCreate(indexName, bytes.NewReader(drifted))
+
+		err = opensearch.IndexManagerLatest.Apply(t.Context(), indexName, tc.Client(), log.NopLogger(), withDefinitions(definitions)...)
+		require.ErrorIs(t, err, opensearch.ErrManualActionRequired)
+		require.ErrorContains(t, err, "settings.analysis changed")
+		require.NotContains(t, err.Error(), "content analyzer")
+	})
+
+	t.Run("refuses an index with an unprefixed extra definition", func(t *testing.T) {
+		tc := opensearchtest.NewDefaultTestClient(t, defaultConfig.Engine.OpenSearch.Client)
+		indexName := "opencloud-test-resource"
+		tc.Require.IndicesReset([]string{indexName})
+		body, err := sjson.Set(opensearch.IndexManagerLatest.String(), "settings.analysis.tokenizer.standard", map[string]string{"type": "keyword"})
+		require.NoError(t, err)
+		tc.Require.IndicesCreate(indexName, strings.NewReader(body))
+
+		err = opensearch.IndexManagerLatest.Apply(t.Context(), indexName, tc.Client(), log.NopLogger(), opensearch.WithContentAnalysis([]byte(`{}`)))
+		require.ErrorIs(t, err, opensearch.ErrManualActionRequired)
+		require.ErrorContains(t, err, `settings.analysis changed`)
+		require.ErrorContains(t, err, `"standard":{"type":"keyword"}`)
+	})
+}
+
 func TestIndexManager(t *testing.T) {
 	t.Run("index plausibility", func(t *testing.T) {
 		tests := []opensearchtest.TableTest[opensearch.IndexManager, struct{}]{
